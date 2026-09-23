@@ -104,3 +104,5 @@ ENV/
 *.pt
 *.pth
 flowers/
+.pytest_cache/
+plots/
