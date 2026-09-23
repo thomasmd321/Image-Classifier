@@ -1,0 +1,9 @@
+line-length = 120
+src = [".", "tests"]
+extend-exclude = ["*.ipynb"]
+
+[lint]
+# pycodestyle errors/warnings, pyflakes, import sorting, common bug patterns
+select = ["E", "W", "F", "I", "B"]
+# zip(strict=) needs Python 3.10; the project supports older versions
+ignore = ["B905"]
