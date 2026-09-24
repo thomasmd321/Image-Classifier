@@ -16,8 +16,8 @@ jobs:
           cache: pip
       - name: Install dependencies (CPU-only PyTorch)
         run: |
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements-dev.txt
+          pip install torch==2.14.0 torchvision==0.29.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-dev.txt -c constraints.txt
       - name: Lint
         run: ruff check .
       - name: Run tests

@@ -13,7 +13,7 @@ import argparse
 import json
 import os
 
-from model_utils import get_device, load_checkpoint, predict
+from model_utils import find_images, get_device, load_checkpoint, predict
 
 
 def get_args(argv=None):
@@ -45,6 +45,23 @@ def make_classifier(model, device, cat_to_name=None, top_k=5):
         return {cat_to_name.get(cls, cls): prob for cls, prob in zip(classes, probs)}
 
     return classify
+
+
+def find_examples(example_dir, count=4):
+    ''' A few test images offered as one-click examples when the dataset is next to the app (else None). '''
+    if not os.path.isdir(example_dir):
+        return None
+    examples = []
+    for cls in sorted(os.listdir(example_dir)):
+        class_dir = os.path.join(example_dir, cls)
+        if not os.path.isdir(class_dir):
+            continue  # e.g. .DS_Store or a README
+        images = find_images(class_dir)
+        if images:
+            examples.append([images[0]])
+        if len(examples) == count:
+            break
+    return examples or None
 
 
 def build_demo(classify, top_k=5, examples=None):
@@ -79,16 +96,7 @@ def main(argv=None):
         with open(args.category_names, 'r') as f:
             cat_to_name = json.load(f)
 
-    # Offer a few test images as one-click examples when the dataset is next to the app
-    example_dir = os.path.join('flowers', 'test')
-    examples = None
-    if os.path.isdir(example_dir):
-        examples = []
-        for cls in sorted(os.listdir(example_dir))[:4]:
-            images = sorted(os.listdir(os.path.join(example_dir, cls)))
-            if images:
-                examples.append([os.path.join(example_dir, cls, images[0])])
-
+    examples = find_examples(os.path.join('flowers', 'test'))
     classify = make_classifier(model, device, cat_to_name, args.top_k)
     build_demo(classify, args.top_k, examples).launch(share=args.share, server_port=args.port)
 

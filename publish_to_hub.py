@@ -16,14 +16,13 @@ import os
 import shutil
 import tempfile
 
-import torch
-
 from export import labels_metadata
 from model_utils import checkpoint_hidden_units, load_checkpoint
 
 # Files copied into the model repository when they exist
 HISTORY_FILES = ['history.png', 'history.csv']
-REPORT_FILES = ['per_class_accuracy.csv', 'confused_pairs.csv', 'confusion_matrix.png', 'misclassified.png']
+REPORT_FILES = ['summary.json', 'per_class_accuracy.csv', 'confused_pairs.csv', 'confusion_matrix.png',
+                'misclassified.png']
 
 
 def get_args(argv=None):
@@ -44,15 +43,30 @@ def get_args(argv=None):
     return args
 
 
+SPLIT_NAMES = {'test': 'Test', 'valid': 'Validation', 'train': 'Training'}
+
+
 def report_accuracy(report_dir):
-    ''' Overall accuracy from evaluate.py's per_class_accuracy.csv, or None. '''
-    path = os.path.join(report_dir or '', 'per_class_accuracy.csv')
-    if not report_dir or not os.path.exists(path):
-        return None
+    ''' (accuracy, label) from evaluate.py's report, e.g. (0.93, 'Test accuracy'), or (None, None).
+        The label names the split that was evaluated, so validation accuracy is never called test accuracy.
+    '''
+    if not report_dir:
+        return None, None
+    summary_path = os.path.join(report_dir, 'summary.json')
+    if os.path.exists(summary_path):
+        with open(summary_path) as f:
+            summary = json.load(f)
+        label = '{} accuracy{}'.format(SPLIT_NAMES.get(summary['split'], summary['split']),
+                                       ' (TTA)' if summary.get('tta') else '')
+        return summary['accuracy'], label
+    # Reports from before summary.json existed don't say which split they are
+    path = os.path.join(report_dir, 'per_class_accuracy.csv')
+    if not os.path.exists(path):
+        return None, None
     with open(path, newline='') as f:
         rows = list(csv.DictReader(f))
     images = sum(int(r['images']) for r in rows)
-    return sum(int(r['correct']) for r in rows) / images if images else None
+    return (sum(int(r['correct']) for r in rows) / images, 'Evaluation accuracy') if images else (None, None)
 
 
 def history_summary(history_dir):
@@ -65,7 +79,7 @@ def history_summary(history_dir):
     return len(rows), sum(r['phase'] == 'finetune' for r in rows)
 
 
-def model_card(repo_id, checkpoint, metadata, test_accuracy, epochs, finetune_epochs, files):
+def model_card(repo_id, checkpoint, metadata, eval_accuracy, eval_label, epochs, finetune_epochs, files):
     ''' README.md for the model repository: Hub metadata header, results, usage and limitations. '''
     arch = checkpoint['structure']
     hidden = checkpoint_hidden_units(checkpoint)
@@ -75,14 +89,15 @@ def model_card(repo_id, checkpoint, metadata, test_accuracy, epochs, finetune_ep
 
     lines = ['---', 'library_name: pytorch', 'license: mit', 'pipeline_tag: image-classification',
              'tags:', '- image-classification', '- pytorch', '- flowers', '- transfer-learning']
-    if valid_accuracy is not None or test_accuracy is not None:
+    if valid_accuracy is not None or eval_accuracy is not None:
         lines += ['model-index:', '- name: {}'.format(repo.split('/')[-1]), '  results:',
                   '  - task:', '      type: image-classification', '    dataset:',
                   '      name: 102 Category Flower Dataset', '      type: image-classification', '    metrics:']
-        if test_accuracy is not None:
-            lines += ['    - type: accuracy', '      name: Test accuracy', '      value: {:.4f}'.format(test_accuracy)]
+        if eval_accuracy is not None:
+            lines += ['    - type: accuracy', '      name: {}'.format(eval_label),
+                      '      value: {:.4f}'.format(eval_accuracy)]
         if valid_accuracy is not None:
-            lines += ['    - type: accuracy', '      name: Validation accuracy',
+            lines += ['    - type: accuracy', '      name: Best validation accuracy (during training)',
                       '      value: {:.4f}'.format(valid_accuracy)]
     lines += ['---', '']
 
@@ -93,8 +108,8 @@ def model_card(repo_id, checkpoint, metadata, test_accuracy, epochs, finetune_ep
               '', 'Trained with the [Image Classifier project](https://github.com/thomasmd321/Image-Classifier) '
               'on the 102 Category Flower Dataset (Nilsback & Zisserman).', '', '## Results', '',
               '| Metric | Value |', '| --- | --- |']
-    if test_accuracy is not None:
-        lines.append('| Test accuracy | {:.1%} |'.format(test_accuracy))
+    if eval_accuracy is not None:
+        lines.append('| {} | {:.1%} |'.format(eval_label, eval_accuracy))
     if valid_accuracy is not None:
         lines.append('| Best validation accuracy | {:.1%} |'.format(valid_accuracy))
     if epochs is not None:
@@ -129,8 +144,7 @@ def model_card(repo_id, checkpoint, metadata, test_accuracy, epochs, finetune_ep
 
 def build_repository(args, folder):
     ''' Writes the checkpoint, labels, charts and model card into folder; returns the file names. '''
-    checkpoint = torch.load(args.checkpoint, map_location='cpu')
-    model = load_checkpoint(args.checkpoint)
+    model, checkpoint = load_checkpoint(args.checkpoint, with_checkpoint=True)
     cat_to_name = None
     if args.category_names and os.path.exists(args.category_names):
         with open(args.category_names) as f:
@@ -151,8 +165,9 @@ def build_repository(args, folder):
                 files.append(name)
 
     epochs, finetune_epochs = history_summary(history_dir)
-    card = model_card(args.repo_id, checkpoint, metadata, report_accuracy(args.report_dir), epochs,
-                      finetune_epochs, files)
+    eval_accuracy, eval_label = report_accuracy(args.report_dir)
+    card = model_card(args.repo_id, checkpoint, metadata, eval_accuracy, eval_label, epochs, finetune_epochs,
+                      files)
     with open(os.path.join(folder, 'README.md'), 'w') as f:
         f.write(card)
     files.append('README.md')

@@ -18,9 +18,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # CPU-only PyTorch keeps the image a fraction of the size of the default CUDA build
-RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-COPY requirements.txt requirements-demo.txt ./
-RUN pip install -r requirements-demo.txt
+# (versions pinned to match constraints.txt, which pins everything else)
+RUN pip install torch==2.14.0 torchvision==0.29.0 --index-url https://download.pytorch.org/whl/cpu
+COPY requirements.txt requirements-demo.txt constraints.txt ./
+RUN pip install -r requirements-demo.txt -c constraints.txt
 
 COPY model_utils.py app.py cat_to_name.json ./
 

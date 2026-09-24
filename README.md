@@ -32,6 +32,10 @@ Python 3.7+ and PyTorch 1.10+. Install the dependencies with:
 pip install -r requirements.txt
 ```
 
+`requirements.txt` allows a range of versions (so, for example, Colab keeps its preinstalled PyTorch).
+`constraints.txt` lists the exact versions the project is tested with; add `-c constraints.txt` to install
+exactly those, as CI and the Docker image do. When updating a dependency, change it there and let CI confirm it.
+
 Download the [flowers dataset](https://s3.amazonaws.com/content.udacity-data.com/nd089/flower_data.tar.gz)
 (345 MB; 6,552 training, 818 validation and 819 test images of 102 species) into `flowers/`:
 

@@ -104,6 +104,19 @@ def _set_submodule(model, path, module):
     setattr(model.get_submodule(parent) if parent else model, name, module)
 
 
+def set_train_mode(model, finetune=False):
+    ''' Puts only the parts being trained into train mode: the classifier, plus the last block when
+        fine-tuning. The frozen feature extractor stays in eval mode, so its pretrained BatchNorm statistics
+        don't drift and stochastic depth (EfficientNet, ConvNeXt) doesn't randomly drop its layers.
+    '''
+    model.eval()
+    get_classifier(model).train()
+    if finetune:
+        for name in ARCHS[model.arch]['last_block']:
+            model.get_submodule(name).train()
+    return model
+
+
 def unfreeze_last_block(model):
     ''' Makes the last block of the feature extractor trainable for fine-tuning.
         Returns the newly trainable parameters.
@@ -165,9 +178,11 @@ def build_model(arch='densenet121', hidden_units=DEFAULT_HIDDEN_UNITS, num_class
 ################################
 def save_checkpoint(model, hidden_units, num_classes, dropout, class_to_idx,
                     save_dir='.', file_name='check_point.pt',
-                    optimizer=None, scheduler=None, epoch=None, best_accuracy=None, phase='head'):
+                    optimizer=None, scheduler=None, epoch=None, best_accuracy=None, phase='head',
+                    phase_complete=False):
     ''' Saves everything needed to rebuild the model into save_dir/file_name.
-        The optimizer/scheduler state and epoch are included so training can be resumed.
+        Pass the optimizer/scheduler (for last_checkpoint.pt) to be able to resume training; phase_complete
+        records that the phase ended early, so a resume moves on to the next phase.
     '''
     os.makedirs(save_dir, exist_ok=True)
     path = os.path.join(save_dir, file_name)
@@ -181,7 +196,8 @@ def save_checkpoint(model, hidden_units, num_classes, dropout, class_to_idx,
                   'class_to_idx': class_to_idx,
                   'epoch': epoch,
                   'best_accuracy': best_accuracy,
-                  'phase': phase}
+                  'phase': phase,
+                  'phase_complete': phase_complete}
     if optimizer is not None:
         checkpoint['optimizer_state'] = optimizer.state_dict()
     if scheduler is not None:
