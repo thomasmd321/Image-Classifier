@@ -1,0 +1,14 @@
+# Only the demo's source files are copied into the image; keep the build context small
+.git
+.github
+flowers
+checkpoints
+exported
+runs
+tests
+*.pt
+*.onnx
+*.ipynb
+__pycache__
+.pytest_cache
+.ruff_cache

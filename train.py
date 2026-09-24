@@ -89,6 +89,8 @@ def get_args(argv=None):
                         help='Use GPU for training (default: False)')
     parser.add_argument('--no_amp', dest='use_amp', action='store_false', default=True,
                         help='disable mixed precision on the GPU (it is always off on the CPU)')
+    parser.add_argument('--tensorboard', action='store_true', default=False,
+                        help='also log metrics for TensorBoard to <save_dir>/runs (needs `pip install tensorboard`)')
     parser.add_argument('--keep_alive', action='store_true', default=False,
                         help='Keep the Udacity workspace session alive while training')
     parser.add_argument('--version', action='version',
@@ -269,7 +271,7 @@ def make_optimizer(model, phase, args):
 
 
 def model_train(model, train_loader, valid_loader, train_criterion, eval_criterion, optimizer, scheduler,
-                device, args, save_kwargs, phase, first_epoch, last_epoch, best_accuracy=None):
+                device, args, save_kwargs, phase, first_epoch, last_epoch, best_accuracy=None, writer=None):
     ''' Trains for epochs [first_epoch, last_epoch), validating after every epoch.
         Saves the best model (by validation accuracy) to check_point.pt and the latest epoch
         to last_checkpoint.pt, and stops early after args.patience epochs without improvement.
@@ -336,6 +338,10 @@ def model_train(model, train_loader, valid_loader, train_criterion, eval_criteri
                                        'valid_accuracy': '{:.6f}'.format(accuracy),
                                        'learning_rate': '{:g}'.format(old_lr),
                                        'seconds': '{:.1f}'.format(time.time() - epoch_start)})
+        if writer is not None:
+            writer.add_scalars('loss', {'train': epoch_loss / len(train_loader), 'validation': valid_loss}, e + 1)
+            writer.add_scalar('accuracy/validation', accuracy, e + 1)
+            writer.add_scalar('learning_rate', old_lr, e + 1)
 
         state = dict(optimizer=optimizer, scheduler=scheduler, epoch=e + 1, best_accuracy=best_accuracy,
                      phase=phase)
@@ -350,6 +356,19 @@ def model_train(model, train_loader, valid_loader, train_criterion, eval_criteri
     print('{} training complete in {}'.format('Fine-tuning' if phase == 'finetune' else 'Classifier',
                                               format_time(time.time() - start_time)))
     return best_accuracy
+
+
+def make_writer(args):
+    ''' A TensorBoard SummaryWriter logging to <save_dir>/runs, or None without --tensorboard. '''
+    if not args.tensorboard:
+        return None
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+    except ImportError:
+        raise SystemExit('--tensorboard needs the tensorboard package: pip install tensorboard') from None
+    log_dir = os.path.join(args.save_dir, 'runs')
+    print('Logging to TensorBoard; view with: tensorboard --logdir {}'.format(log_dir))
+    return SummaryWriter(log_dir)
 
 
 def main(argv=None):
@@ -404,6 +423,7 @@ def main(argv=None):
     else:
         session = contextlib.nullcontext()
 
+    writer = make_writer(args)
     with session:
         for name, first, last in phases:
             if last <= first or (name == 'head' and phase == 'finetune'):
@@ -424,7 +444,7 @@ def main(argv=None):
                     scheduler.load_state_dict(checkpoint['scheduler_state'])
             best_accuracy = model_train(model, train_loader, valid_loader, train_criterion, eval_criterion,
                                         optimizer, scheduler, device, args, save_kwargs, name, first, last,
-                                        best_accuracy)
+                                        best_accuracy, writer)
 
         plot_path = plot_history(args.save_dir)
 
@@ -438,6 +458,9 @@ def main(argv=None):
         start_time = time.time()
         _, test_accuracy = evaluate(model, test_loader, eval_criterion, device)
         print('Test images network accuracy: {:.1f} %'.format(100 * test_accuracy))
+        if writer is not None:
+            writer.add_scalar('accuracy/test', test_accuracy)
+            writer.close()
         print("Time Elapsed: {}".format(format_time(time.time() - start_time)))
 
     print('Model: ', args.arch)

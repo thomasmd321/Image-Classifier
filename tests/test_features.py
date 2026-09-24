@@ -14,20 +14,6 @@ import train
 FAST = ['--batch_size', '4', '--num_workers', '0', '--seed', '0']
 
 
-@pytest.fixture(scope='module')
-def trained(data_dir, tmp_path_factory):
-    ''' One small trained run (2 classifier epochs + 1 fine-tuning epoch) shared by the tests below. '''
-    save_dir = tmp_path_factory.mktemp('trained')
-    original = model_utils._load_pretrained
-    model_utils._load_pretrained = lambda arch, pretrained=True: original(arch, False)
-    try:
-        train.main([str(data_dir), '--save_dir', str(save_dir), '--epochs', '2', '--finetune_epochs', '1',
-                    '--hidden_units', '64', '32'] + FAST)
-    finally:
-        model_utils._load_pretrained = original
-    return save_dir
-
-
 def test_hidden_units_are_configurable():
     model = model_utils.build_model('densenet121', [64, 32], num_classes=5, pretrained=False)
     sizes = [layer.out_features for layer in model.classifier if isinstance(layer, nn.Linear)]

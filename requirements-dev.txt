@@ -4,3 +4,6 @@ ruff
 # optional ONNX export (export.py --format onnx) and its tests
 onnx
 onnxruntime
+# optional TensorBoard logging (train.py --tensorboard) and Hub publishing
+tensorboard
+huggingface_hub
