@@ -8,6 +8,7 @@
 # Use GPU for inference: python predict.py input checkpoint --gpu
 # Predict every image in a folder: python predict.py /path/to/folder checkpoint
 # Save a chart of each prediction: python predict.py input checkpoint --plot_dir plots
+# Test-time augmentation (slightly more accurate): python predict.py input checkpoint --tta
 # Typical run:
 #   python predict.py flowers/test/10/image_07104.jpg check_point.pt --gpu --category_names cat_to_name.json --top_k 3
 #####################################################################################################################
@@ -33,6 +34,8 @@ def get_args(argv=None):
                         help='top K most likely classes (default: 3)')
     parser.add_argument('--plot_dir', metavar='plot_dir', default=None,
                         help='save an image + bar chart of each prediction into this folder')
+    parser.add_argument('--tta', action='store_true', default=False,
+                        help='test-time augmentation: average the predictions for the image and its mirror image')
     parser.add_argument('--gpu', dest='use_gpu', action='store_true', default=False,
                         help='Use GPU for inference (default: False)')
     parser.add_argument('--version', action='version',
@@ -61,7 +64,7 @@ def main(argv=None):
 
     results = []
     for image_path in image_paths:
-        probs, classes = predict(image_path, model, args.top_k, device)
+        probs, classes = predict(image_path, model, args.top_k, device, tta=args.tta)
         names = [cat_to_name.get(cls, cls) for cls in classes]
         results.append((image_path, probs, names))
 

@@ -5,7 +5,9 @@
 # Options:
 # Use flower names: python app.py --checkpoint check_point.pt --category_names cat_to_name.json (the default)
 # Share a temporary public link: python app.py --checkpoint check_point.pt --share
-# The checkpoint can also be set with the CHECKPOINT environment variable (handy on Hugging Face Spaces)
+# Use a model published with publish_to_hub.py: python app.py --hub_repo your-name/flower-classifier
+# The checkpoint / Hub repository can also be set with the CHECKPOINT / HUB_REPO environment variables
+# (handy on Hugging Face Spaces and in Docker)
 #####################################################################################################################
 import argparse
 import json
@@ -18,6 +20,9 @@ def get_args(argv=None):
     parser = argparse.ArgumentParser(description='Web demo for the flower classifier.')
     parser.add_argument('--checkpoint', default=os.environ.get('CHECKPOINT', 'check_point.pt'),
                         help='checkpoint created by train.py (default: $CHECKPOINT or check_point.pt)')
+    parser.add_argument('--hub_repo', default=os.environ.get('HUB_REPO'),
+                        help='download check_point.pt from this Hugging Face Hub repository instead '
+                             '(default: $HUB_REPO)')
     parser.add_argument('--category_names', default='cat_to_name.json',
                         help='JSON file mapping categories to real names (default: cat_to_name.json)')
     parser.add_argument('--top_k', default=5, type=int, help='number of predictions to show (default: 5)')
@@ -58,6 +63,12 @@ def build_demo(classify, top_k=5, examples=None):
 
 def main(argv=None):
     args = get_args(argv)
+    if args.hub_repo:
+        try:
+            from huggingface_hub import hf_hub_download
+        except ImportError:
+            raise SystemExit('--hub_repo needs the huggingface_hub package: pip install huggingface_hub') from None
+        args.checkpoint = hf_hub_download(args.hub_repo, 'check_point.pt')
     if not os.path.exists(args.checkpoint):
         raise SystemExit('Checkpoint {} not found. Train a model with train.py first.'.format(args.checkpoint))
     device = get_device(args.use_gpu)

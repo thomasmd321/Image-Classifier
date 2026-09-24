@@ -33,3 +33,18 @@ def data_dir(tmp_path_factory):
                 pixels = (rng.random((260, 300, 3)) * 255).astype('uint8')
                 Image.fromarray(pixels).save(folder / 'img{}.jpg'.format(i))
     return root
+
+
+@pytest.fixture(scope='session')
+def trained(data_dir, tmp_path_factory):
+    ''' One small trained run (2 classifier epochs + 1 fine-tuning epoch) shared by several tests. '''
+    import train
+    save_dir = tmp_path_factory.mktemp('trained')
+    original = model_utils._load_pretrained
+    model_utils._load_pretrained = lambda arch, pretrained=True: original(arch, False)
+    try:
+        train.main([str(data_dir), '--save_dir', str(save_dir), '--epochs', '2', '--finetune_epochs', '1',
+                    '--hidden_units', '64', '32', '--batch_size', '4', '--num_workers', '0', '--seed', '0'])
+    finally:
+        model_utils._load_pretrained = original
+    return save_dir

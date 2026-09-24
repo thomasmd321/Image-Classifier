@@ -17,13 +17,18 @@ from torchvision import models, transforms
 ##########################
 # For each supported architecture:
 #   in_features - number of inputs its classifier receives
-#   head        - attribute that holds the classifier (ResNets call it "fc")
+#   head        - module replaced by the new classifier (ResNets call it "fc"; for ConvNeXt only the final
+#                 Linear layer "classifier.2" is replaced, keeping its pretrained LayerNorm and Flatten)
 #   last_block  - modules unfrozen for fine-tuning (the last block of the feature extractor)
 ARCHS = {"densenet121": {"in_features": 1024, "head": "classifier",
                          "last_block": ["features.denseblock4", "features.norm5"]},
          "alexnet": {"in_features": 9216, "head": "classifier", "last_block": ["features.10"]},
          "vgg16": {"in_features": 25088, "head": "classifier", "last_block": ["features.28"]},
-         "resnet50": {"in_features": 2048, "head": "fc", "last_block": ["layer4"]}}
+         "resnet50": {"in_features": 2048, "head": "fc", "last_block": ["layer4"]},
+         "efficientnet_b0": {"in_features": 1280, "head": "classifier",
+                             "last_block": ["features.7", "features.8"]},
+         "convnext_tiny": {"in_features": 768, "head": "classifier.2",
+                           "last_block": ["features.7", "classifier.0"]}}
 
 # The classifier layout used by the original project: 512 -> 90 -> 80 -> classes
 DEFAULT_HIDDEN_UNITS = [512, 90, 80]
@@ -91,7 +96,12 @@ def _load_pretrained(arch, pretrained=True):
 def get_classifier(model):
     ''' Returns the trainable classifier head of a model built by build_model.
     '''
-    return getattr(model, ARCHS[model.arch]['head'])
+    return model.get_submodule(ARCHS[model.arch]['head'])
+
+
+def _set_submodule(model, path, module):
+    parent, _, name = path.rpartition('.')
+    setattr(model.get_submodule(parent) if parent else model, name, module)
 
 
 def unfreeze_last_block(model):
@@ -145,7 +155,7 @@ def build_model(arch='densenet121', hidden_units=DEFAULT_HIDDEN_UNITS, num_class
         param.requires_grad = False
 
     classifier = build_classifier(ARCHS[arch]['in_features'], hidden_units, num_classes, dropout)
-    setattr(model, ARCHS[arch]['head'], classifier)
+    _set_submodule(model, ARCHS[arch]['head'], classifier)
     model.arch = arch
     return model
 
@@ -229,23 +239,32 @@ def find_images(path):
 ####################
 # Class Prediction
 ####################
-def predict(image_path, model, topk=5, device=CPU):
+def predict_probs(model, images, tta=False):
+    ''' Class probabilities for a batch of preprocessed images.
+        With tta=True (test-time augmentation), averages the predictions for each image and its mirror image.
+    '''
+    with torch.no_grad():
+        # The model outputs log-probabilities, so exp() gives the probabilities
+        probs = torch.exp(model(images))
+        if tta:
+            probs = (probs + torch.exp(model(torch.flip(images, dims=[3])))) / 2
+    return probs
+
+
+def predict(image_path, model, topk=5, device=CPU, tta=False):
     ''' Predict the class (or classes) of an image using a trained deep learning model.
         Returns the top K probabilities and their class labels.
     '''
     model.to(device)
     model.eval()
     img_torch = process_image(image_path).unsqueeze(0).to(device)
+    probs = predict_probs(model, img_torch, tta)
 
-    with torch.no_grad():
-        output = model(img_torch)
-
-    # The model outputs log-probabilities, so exp() gives the probabilities
-    topk = min(topk, output.shape[1])
-    probs, indices = torch.exp(output).topk(topk)
+    topk = min(topk, probs.shape[1])
+    top_probs, indices = probs.topk(topk)
     idx_to_class = {val: key for key, val in model.class_to_idx.items()}
     classes = [idx_to_class[index] for index in indices[0].tolist()]
-    return probs[0].tolist(), classes
+    return top_probs[0].tolist(), classes
 
 
 def plot_prediction(image_path, names, probs, out_path, title=None):
