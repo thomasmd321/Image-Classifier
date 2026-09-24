@@ -5,6 +5,8 @@
 
 Project code for Udacity's AI Programming with Python Nanodegree program. In this project, students first develop code for an image classifier built with PyTorch, then convert it into a command line application.
 
+**Documentation:** the [project wiki](docs/wiki/Home.md) has step-by-step guides for training, evaluation, the demo, exporting and publishing, plus how the model works and troubleshooting.
+
 ## Files
 
 | File | Purpose |
@@ -22,6 +24,7 @@ Project code for Udacity's AI Programming with Python Nanodegree program. In thi
 | `model_utils.py` | Shared code: model building, checkpoint save/load, image preprocessing, prediction |
 | `workspace_utils.py` | Keeps the Udacity workspace alive during long runs (`train.py --keep_alive`) |
 | `cat_to_name.json` | Maps category labels to flower names |
+| `docs/wiki/` | The project wiki (publish it to the GitHub Wiki with `docs/publish_wiki.sh`) |
 | `tests/` | Smoke tests (random weights, tiny synthetic dataset) run by GitHub Actions with a `ruff` lint check |
 
 ## Requirements
