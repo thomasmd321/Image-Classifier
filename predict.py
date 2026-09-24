@@ -8,7 +8,8 @@
 # Use GPU for inference: python predict.py input checkpoint --gpu
 # Predict every image in a folder: python predict.py /path/to/folder checkpoint
 # Save a chart of each prediction: python predict.py input checkpoint --plot_dir plots
-# Typical run: python predict.py flowers/test/10/image_07104.jpg check_point.pt --gpu --category_names cat_to_name.json --top_k 3
+# Typical run:
+#   python predict.py flowers/test/10/image_07104.jpg check_point.pt --gpu --category_names cat_to_name.json --top_k 3
 #####################################################################################################################
 import argparse
 import json
@@ -34,7 +35,9 @@ def get_args(argv=None):
                         help='save an image + bar chart of each prediction into this folder')
     parser.add_argument('--gpu', dest='use_gpu', action='store_true', default=False,
                         help='Use GPU for inference (default: False)')
-    parser.add_argument('--version', action='version', version='%(prog)s 1.2  There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.')  # Decided to pull some wording from GCC
+    parser.add_argument('--version', action='version',
+                        version='%(prog)s 1.3  There is NO warranty; not even for MERCHANTABILITY or '
+                                'FITNESS FOR A PARTICULAR PURPOSE.')  # Decided to pull some wording from GCC
     return parser.parse_args(argv)
 
 

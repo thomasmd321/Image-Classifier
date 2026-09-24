@@ -96,5 +96,5 @@ def test_early_stopping(data_dir, tmp_path, capsys):
     train.main([str(data_dir), '--save_dir', str(tmp_path), '--epochs', '10', '--patience', '2',
                 '--learning_rate', '0', '--batch_size', '4', '--num_workers', '0'])
     out = capsys.readouterr().out
-    assert 'stopping early' in out
+    assert 'stopping this phase early' in out
     assert torch.load(tmp_path / train.LAST_CHECKPOINT)['epoch'] == 3

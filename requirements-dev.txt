@@ -1,2 +1,6 @@
 -r requirements.txt
 pytest
+ruff
+# optional ONNX export (export.py --format onnx) and its tests
+onnx
+onnxruntime

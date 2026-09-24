@@ -1,22 +1,27 @@
 # AI Programming with Python Project
 
+[![tests](https://github.com/thomasmd321/Image-Classifier/actions/workflows/tests.yml/badge.svg)](https://github.com/thomasmd321/Image-Classifier/actions/workflows/tests.yml)
+
 Project code for Udacity's AI Programming with Python Nanodegree program. In this project, students first develop code for an image classifier built with PyTorch, then convert it into a command line application.
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
-| `Image Classifier Project.ipynb` | Notebook version of the project: load data, train, test, save/load a checkpoint, predict and plot |
-| `train.py` | Command line app that trains a classifier on a dataset and saves a checkpoint |
-| `predict.py` | Command line app that predicts the class of an image from a saved checkpoint |
+| `Image Classifier Project.ipynb` | Notebook version of the project: load data, train (with fine-tuning), plot learning curves, test, save/load a checkpoint, predict and plot |
+| `train.py` | Command line app that trains a classifier on a dataset and saves checkpoints and a training history |
+| `predict.py` | Command line app that predicts the class of an image (or a folder of images) from a checkpoint |
+| `evaluate.py` | Per-class accuracy and most-confused flower pairs for a checkpoint |
+| `export.py` | Exports a checkpoint to TorchScript and/or ONNX so it runs without this code |
+| `app.py` | Web demo: upload a flower photo and see the top 5 predictions |
 | `model_utils.py` | Shared code: model building, checkpoint save/load, image preprocessing, prediction |
 | `workspace_utils.py` | Keeps the Udacity workspace alive during long runs (`train.py --keep_alive`) |
 | `cat_to_name.json` | Maps category labels to flower names |
-| `tests/` | Quick smoke tests (random weights, tiny synthetic dataset) run by GitHub Actions |
+| `tests/` | Smoke tests (random weights, tiny synthetic dataset) run by GitHub Actions with a `ruff` lint check |
 
 ## Requirements
 
-Python 3.7+. Install the dependencies with:
+Python 3.7+ and PyTorch 1.10+. Install the dependencies with:
 
 ```bash
 pip install -r requirements.txt
@@ -29,38 +34,51 @@ The data directory must contain `train/`, `valid/` and `test/` folders, each wit
 
 ```bash
 python train.py flowers
-python train.py flowers --arch densenet121 --learning_rate 0.001 --hidden_units 512 --epochs 20 --gpu --save_dir checkpoints
+python train.py flowers --arch densenet121 --epochs 20 --finetune_epochs 5 --gpu --seed 42 --save_dir checkpoints
 ```
+
+Training runs in two phases:
+
+1. **Classifier** (`--epochs`): the pretrained feature extractor is frozen and only the new classifier is trained.
+2. **Fine-tuning** (`--finetune_epochs`, off by default): starting from the best classifier, the last block of the
+   feature extractor is unfrozen too and trained at a lower learning rate. This usually adds several points of
+   accuracy.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--save_dir` | `.` | Where checkpoints are written |
+| `--save_dir` | `.` | Where checkpoints and the training history are written |
 | `--arch` | `densenet121` | `densenet121`, `alexnet`, `vgg16` or `resnet50` |
-| `--learning_rate` | `0.001` | Adam learning rate; reduced 10x when validation loss stops improving for 2 epochs |
-| `--hidden_units` | `512` | Size of the first hidden layer of the classifier |
-| `--epochs` | `20` | Maximum number of epochs |
-| `--patience` | `5` | Stop early after this many epochs without a validation accuracy improvement (`0` disables) |
+| `--hidden_units` | `512 90 80` | Size of each hidden layer of the classifier, e.g. `--hidden_units 512` or `--hidden_units 1024 256` |
+| `--learning_rate` | `0.001` | Adam learning rate for the classifier phase; reduced 10x when validation loss stops improving for 2 epochs |
+| `--epochs` | `20` | Maximum epochs for the classifier phase |
+| `--finetune_epochs` | `0` | Epochs to fine-tune the last feature-extractor block afterwards (`0` = off) |
+| `--finetune_lr` | `0.0001` | Learning rate for the fine-tuning phase |
+| `--patience` | `5` | Stop a phase early after this many epochs without a validation accuracy improvement (`0` disables) |
 | `--dropout` | `0.5` | Classifier dropout |
+| `--label_smoothing` | `0.1` | Label smoothing on the training loss (`0` disables) |
 | `--batch_size` | `20` | Images per batch |
 | `--num_workers` | `4` | Data loading processes |
 | `--print_every` | `50` | Print the training loss every N batches |
 | `--seed` | none | Random seed for reproducible runs |
-| `--resume` | none | Continue an interrupted run from `last_checkpoint.pt` |
-| `--gpu` | off | Train on the GPU |
+| `--resume` | none | Continue an interrupted run from `last_checkpoint.pt` (works in either phase) |
+| `--gpu` | off | Train on the GPU (uses mixed precision automatically) |
+| `--no_amp` | off | Turn off mixed precision on the GPU |
 | `--keep_alive` | off | Keep the Udacity workspace awake during long runs |
 
-Training prints the training loss, then the validation loss and accuracy after every epoch. Two checkpoints are
-written to `--save_dir`:
+Training images are augmented with random rotation, crops, flips and small color changes. Training prints the
+training loss, then the validation loss and accuracy after every epoch, and writes to `--save_dir`:
 
 - `check_point.pt`: the model with the best validation accuracy so far. This is the one to use for prediction,
   and the one the final test accuracy is measured on.
 - `last_checkpoint.pt`: the latest epoch, including the optimizer and learning-rate scheduler state, for `--resume`.
+- `history.csv` and `history.png`: loss, validation accuracy and learning rate for every epoch, and a chart of
+  the learning curves.
 
 To resume after an interruption, rerun with the same data and `--resume`; the architecture and hidden units come
 from the checkpoint:
 
 ```bash
-python train.py flowers --gpu --save_dir checkpoints --resume checkpoints/last_checkpoint.pt
+python train.py flowers --gpu --save_dir checkpoints --finetune_epochs 5 --resume checkpoints/last_checkpoint.pt
 ```
 
 ## Prediction
@@ -74,20 +92,58 @@ python predict.py flowers/test/10 check_point.pt --category_names cat_to_name.js
 `image_path` can be a single image or a folder of images. `--plot_dir` saves each image with a bar chart of its
 top predictions. A checkpoint trained on a GPU can be used for prediction on a CPU-only machine.
 
+## Evaluation report
+
+```bash
+python evaluate.py flowers check_point.pt --category_names cat_to_name.json --gpu
+```
+
+Prints the overall accuracy, the classes the model gets wrong most often and the most common mistakes
+(true flower -> predicted flower), and writes `per_class_accuracy.csv` and `confused_pairs.csv`. Use `--split valid`
+to evaluate the validation images instead of the test images.
+
+## Web demo
+
+```bash
+pip install -r requirements-demo.txt
+python app.py --checkpoint check_point.pt
+```
+
+Open the printed local address, upload a flower photo and the demo shows the top 5 predictions. `--share` creates a
+temporary public link. To host it for free on [Hugging Face Spaces](https://huggingface.co/spaces), create a Gradio
+Space and upload `app.py`, `model_utils.py`, `cat_to_name.json`, `requirements-demo.txt` (renamed to
+`requirements.txt`, with the `-r` line replaced by the contents of this project's `requirements.txt`) and your
+`check_point.pt`.
+
+## Export
+
+```bash
+python export.py check_point.pt --format both --category_names cat_to_name.json --output_dir exported
+```
+
+Writes `flower_classifier.torchscript.pt` (load with `torch.jit.load`), `flower_classifier.onnx` (run with
+[ONNX Runtime](https://onnxruntime.ai/) from Python, C#, Java, JavaScript, mobile, ...) and
+`flower_classifier.labels.json` with the class labels, flower names and the preprocessing to apply (resize to 256,
+center-crop 224, normalize). The exported models take a batch of preprocessed images and return class
+probabilities. ONNX export needs `pip install onnx`. Recent PyTorch versions mark TorchScript as deprecated, but
+it still works; ONNX is the more portable choice.
+
 ## Results
 
-_Fill in after a full training run on the flowers dataset:_
+_Fill in after a full training run on the flowers dataset (numbers from the training output, `history.csv` and
+`evaluate.py`):_
 
-| Architecture | Epochs | Best validation accuracy | Test accuracy | Training time (GPU) |
-| --- | --- | --- | --- | --- |
-| densenet121 | | | | |
+| Architecture | Classifier epochs | Fine-tuning epochs | Best validation accuracy | Test accuracy | Training time (GPU) |
+| --- | --- | --- | --- | --- | --- |
+| densenet121 | | | | | |
 
 ## Tests
 
 ```bash
 pip install -r requirements-dev.txt
+ruff check .
 pytest
 ```
 
-The tests use random weights and a tiny generated dataset, so they run in under a minute on a CPU without
+The tests use random weights and a tiny generated dataset, so they run in about a minute on a CPU without
 downloading anything. They check that the scripts run end to end, not model accuracy.

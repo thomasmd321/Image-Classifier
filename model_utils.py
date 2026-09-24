@@ -8,22 +8,50 @@ from collections import OrderedDict
 
 import numpy as np
 import torch
+from PIL import Image
 from torch import nn
 from torchvision import models, transforms
-from PIL import Image
 
 ##########################
 # Possible models to use
 ##########################
-# Maps each supported architecture to the number of input features its classifier receives
-# and the name of the attribute that holds the classifier (ResNets call it "fc")
-ARCHS = {"densenet121": {"in_features": 1024, "head": "classifier"},
-         "alexnet": {"in_features": 9216, "head": "classifier"},
-         "vgg16": {"in_features": 25088, "head": "classifier"},
-         "resnet50": {"in_features": 2048, "head": "fc"}}
+# For each supported architecture:
+#   in_features - number of inputs its classifier receives
+#   head        - attribute that holds the classifier (ResNets call it "fc")
+#   last_block  - modules unfrozen for fine-tuning (the last block of the feature extractor)
+ARCHS = {"densenet121": {"in_features": 1024, "head": "classifier",
+                         "last_block": ["features.denseblock4", "features.norm5"]},
+         "alexnet": {"in_features": 9216, "head": "classifier", "last_block": ["features.10"]},
+         "vgg16": {"in_features": 25088, "head": "classifier", "last_block": ["features.28"]},
+         "resnet50": {"in_features": 2048, "head": "fc", "last_block": ["layer4"]}}
+
+# The classifier layout used by the original project: 512 -> 90 -> 80 -> classes
+DEFAULT_HIDDEN_UNITS = [512, 90, 80]
 
 NORM_MEAN = [0.485, 0.456, 0.406]
 NORM_STD = [0.229, 0.224, 0.225]
+
+
+
+def train_transforms():
+    ''' Random augmentation used while training. '''
+    return transforms.Compose([transforms.RandomRotation(30),
+                               transforms.RandomResizedCrop(224),
+                               transforms.RandomHorizontalFlip(),
+                               transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                               transforms.ToTensor(),
+                               transforms.Normalize(NORM_MEAN, NORM_STD)])
+
+
+def eval_transforms():
+    ''' Deterministic resize + center crop used for validation, testing and prediction. '''
+    return transforms.Compose([transforms.Resize(256),
+                               transforms.CenterCrop(224),
+                               transforms.ToTensor(),
+                               transforms.Normalize(NORM_MEAN, NORM_STD)])
+
+
+CPU = torch.device('cpu')
 
 IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tif', '.tiff', '.webp')
 
@@ -66,8 +94,45 @@ def get_classifier(model):
     return getattr(model, ARCHS[model.arch]['head'])
 
 
-def build_model(arch='densenet121', hidden_units=512, num_classes=102, dropout=0.5, pretrained=True):
+def unfreeze_last_block(model):
+    ''' Makes the last block of the feature extractor trainable for fine-tuning.
+        Returns the newly trainable parameters.
+    '''
+    params = []
+    for name in ARCHS[model.arch]['last_block']:
+        for param in model.get_submodule(name).parameters():
+            param.requires_grad = True
+            params.append(param)
+    return params
+
+
+def _hidden_list(hidden_units):
+    if isinstance(hidden_units, int):
+        return [hidden_units]
+    hidden_units = list(hidden_units)
+    if not hidden_units:
+        raise SystemExit('The classifier needs at least one hidden layer.')
+    return hidden_units
+
+
+def build_classifier(in_features, hidden_units, num_classes, dropout=0.5):
+    ''' Feed-forward classifier: dropout, then one Linear + ReLU per hidden layer, then the output layer.
+        The layer names match the original project, so [512, 90, 80] loads old checkpoints.
+    '''
+    sizes = [in_features] + _hidden_list(hidden_units)
+    layers = [('dropout', nn.Dropout(dropout))]
+    for i in range(1, len(sizes)):
+        name = 'inputs' if i == 1 else 'hidden_layer{}'.format(i - 1)
+        layers += [(name, nn.Linear(sizes[i - 1], sizes[i])), ('relu{}'.format(i), nn.ReLU())]
+    layers += [('hidden_layer{}'.format(len(sizes) - 1), nn.Linear(sizes[-1], num_classes)),
+               ('output', nn.LogSoftmax(dim=1))]
+    return nn.Sequential(OrderedDict(layers))
+
+
+def build_model(arch='densenet121', hidden_units=DEFAULT_HIDDEN_UNITS, num_classes=102, dropout=0.5,
+                pretrained=True):
     ''' Builds a pretrained feature extractor with a new, trainable feed-forward classifier.
+        hidden_units is one size or a list of sizes, one per hidden layer.
     '''
     if arch not in ARCHS:
         raise SystemExit("Im sorry but {} is not a valid model. Did you mean one of {}?".format(
@@ -79,17 +144,7 @@ def build_model(arch='densenet121', hidden_units=512, num_classes=102, dropout=0
     for param in model.parameters():
         param.requires_grad = False
 
-    classifier = nn.Sequential(OrderedDict([
-        ('dropout', nn.Dropout(dropout)),
-        ('inputs', nn.Linear(ARCHS[arch]['in_features'], hidden_units)),
-        ('relu1', nn.ReLU()),
-        ('hidden_layer1', nn.Linear(hidden_units, 90)),
-        ('relu2', nn.ReLU()),
-        ('hidden_layer2', nn.Linear(90, 80)),
-        ('relu3', nn.ReLU()),
-        ('hidden_layer3', nn.Linear(80, num_classes)),
-        ('output', nn.LogSoftmax(dim=1))
-    ]))
+    classifier = build_classifier(ARCHS[arch]['in_features'], hidden_units, num_classes, dropout)
     setattr(model, ARCHS[arch]['head'], classifier)
     model.arch = arch
     return model
@@ -100,7 +155,7 @@ def build_model(arch='densenet121', hidden_units=512, num_classes=102, dropout=0
 ################################
 def save_checkpoint(model, hidden_units, num_classes, dropout, class_to_idx,
                     save_dir='.', file_name='check_point.pt',
-                    optimizer=None, scheduler=None, epoch=None, best_accuracy=None):
+                    optimizer=None, scheduler=None, epoch=None, best_accuracy=None, phase='head'):
     ''' Saves everything needed to rebuild the model into save_dir/file_name.
         The optimizer/scheduler state and epoch are included so training can be resumed.
     '''
@@ -109,13 +164,14 @@ def save_checkpoint(model, hidden_units, num_classes, dropout, class_to_idx,
     # Copy the weights to the CPU so the checkpoint loads on machines without a GPU
     state_dict = {key: value.cpu() for key, value in model.state_dict().items()}
     checkpoint = {'structure': model.arch,
-                  'hidden_layer1': hidden_units,
+                  'hidden_layers': _hidden_list(hidden_units),
                   'num_classes': num_classes,
                   'dropout': dropout,
                   'state_dict': state_dict,
                   'class_to_idx': class_to_idx,
                   'epoch': epoch,
-                  'best_accuracy': best_accuracy}
+                  'best_accuracy': best_accuracy,
+                  'phase': phase}
     if optimizer is not None:
         checkpoint['optimizer_state'] = optimizer.state_dict()
     if scheduler is not None:
@@ -124,14 +180,21 @@ def save_checkpoint(model, hidden_units, num_classes, dropout, class_to_idx,
     return path
 
 
-def load_checkpoint(path, device=torch.device('cpu'), with_checkpoint=False):
+def checkpoint_hidden_units(checkpoint):
+    ''' Hidden layer sizes stored in a checkpoint; older checkpoints only stored the first size. '''
+    if 'hidden_layers' in checkpoint:
+        return checkpoint['hidden_layers']
+    return [checkpoint['hidden_layer1'], 90, 80]
+
+
+def load_checkpoint(path, device=CPU, with_checkpoint=False):
     ''' Loads a checkpoint and rebuilds the model in eval mode on the given device.
         With with_checkpoint=True, also returns the raw checkpoint dict (for resuming training).
     '''
     checkpoint = torch.load(path, map_location=device)
     # The pretrained weights are overwritten by the state_dict, so skip downloading them
     model = build_model(checkpoint['structure'],
-                        checkpoint['hidden_layer1'],
+                        checkpoint_hidden_units(checkpoint),
                         checkpoint.get('num_classes', 102),
                         checkpoint.get('dropout', 0.5),
                         pretrained=False)
@@ -151,14 +214,7 @@ def process_image(image_path):
     ''' Scales, crops, and normalizes an image file for a PyTorch model,
         returns a tensor of shape (3, 224, 224)
     '''
-    img_pil = Image.open(image_path).convert('RGB')
-    adjustments = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize(NORM_MEAN, NORM_STD)
-    ])
-    return adjustments(img_pil)
+    return eval_transforms()(Image.open(image_path).convert('RGB'))
 
 
 def find_images(path):
@@ -173,7 +229,7 @@ def find_images(path):
 ####################
 # Class Prediction
 ####################
-def predict(image_path, model, topk=5, device=torch.device('cpu')):
+def predict(image_path, model, topk=5, device=CPU):
     ''' Predict the class (or classes) of an image using a trained deep learning model.
         Returns the top K probabilities and their class labels.
     '''
