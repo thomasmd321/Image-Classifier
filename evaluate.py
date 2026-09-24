@@ -7,7 +7,8 @@
 # Use flower names in the report: python evaluate.py data_dir checkpoint --category_names cat_to_name.json
 # Save the CSV reports elsewhere: python evaluate.py data_dir checkpoint --output_dir reports
 # Test-time augmentation: python evaluate.py data_dir checkpoint --tta
-# Writes per_class_accuracy.csv (every class, worst first), confused_pairs.csv (most common mistakes),
+# Writes summary.json (split and overall accuracy), per_class_accuracy.csv (every class, worst first),
+# confused_pairs.csv (most common mistakes),
 # confusion_matrix.png (which flowers get mixed up) and misclassified.png (the model's most confident mistakes)
 #####################################################################################################################
 import argparse
@@ -218,6 +219,9 @@ def main(argv=None):
     os.makedirs(args.output_dir, exist_ok=True)
     per_class_path = os.path.join(args.output_dir, 'per_class_accuracy.csv')
     confused_path = os.path.join(args.output_dir, 'confused_pairs.csv')
+    with open(os.path.join(args.output_dir, 'summary.json'), 'w') as f:
+        json.dump({'split': args.split, 'accuracy': overall, 'tta': args.tta, 'images': len(truths),
+                   'classes': len(per_class)}, f, indent=1)
     write_csv(per_class_path, per_class, ['class', 'name', 'images', 'correct', 'accuracy'])
     write_csv(confused_path, confused, ['true_class', 'true_name', 'predicted_class', 'predicted_name',
                                         'count', 'share_of_true_class'])

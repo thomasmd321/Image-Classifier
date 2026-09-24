@@ -1,9 +1,9 @@
 -r requirements.txt
-pytest
-ruff
+pytest>=7,<10
+ruff>=0.4,<1
 # optional ONNX export (export.py --format onnx) and its tests
-onnx
-onnxruntime
+onnx>=1.14,<2
+onnxruntime>=1.16,<2
 # optional TensorBoard logging (train.py --tensorboard) and Hub publishing
-tensorboard
-huggingface_hub
+tensorboard>=2.10,<3
+huggingface_hub>=0.20,<2

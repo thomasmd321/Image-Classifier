@@ -33,6 +33,7 @@ from model_utils import (
     load_checkpoint,
     save_checkpoint,
     set_seed,
+    set_train_mode,
     train_transforms,
     unfreeze_last_block,
 )
@@ -139,7 +140,7 @@ def make_grad_scaler(enabled):
 # Evaluation function
 ##########################
 def evaluate(model, loader, criterion, device, use_amp=False):
-    ''' Returns (average loss, accuracy) of the model over a data loader.
+    ''' Returns (average loss, accuracy) of the model over a data loader. Leaves the model in eval mode.
     '''
     model.eval()
     total_loss = 0
@@ -154,7 +155,6 @@ def evaluate(model, loader, criterion, device, use_amp=False):
             predicted = outputs.argmax(dim=1)
             correct += (predicted == labels).sum().item()
             total += labels.size(0)
-    model.train()
     return total_loss / len(loader), correct / total
 
 
@@ -182,6 +182,18 @@ def read_history(save_dir):
         return []
     with open(path, newline='') as f:
         return list(csv.DictReader(f))
+
+
+def truncate_history(save_dir, last_epoch):
+    ''' Drops history rows after last_epoch, e.g. an epoch logged just before an interruption
+        whose checkpoint was never saved, so a resumed run doesn't log it twice. '''
+    rows = [row for row in read_history(save_dir) if int(row['epoch']) <= last_epoch]
+    path = os.path.join(save_dir, HISTORY_CSV)
+    if os.path.exists(path):
+        with open(path, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
 
 
 def plot_history(save_dir):
@@ -282,7 +294,7 @@ def model_train(model, train_loader, valid_loader, train_criterion, eval_criteri
     scaler = make_grad_scaler(use_amp)
     total_epochs = args.epochs + args.finetune_epochs
     model.to(device)
-    model.train()
+    set_train_mode(model, finetune=phase == 'finetune')
 
     for e in range(first_epoch, last_epoch):
         epoch_start = time.time()
@@ -301,8 +313,9 @@ def model_train(model, train_loader, valid_loader, train_criterion, eval_criteri
             scaler.step(optimizer)
             scaler.update()
 
-            running_loss += loss.item()
-            epoch_loss += loss.item()
+            batch_loss = loss.item()
+            running_loss += batch_loss
+            epoch_loss += batch_loss
             if step % args.print_every == 0:
                 print("Epoch: {}/{}... ".format(e + 1, total_epochs),
                       "Batch: {}/{}... ".format(step, len(train_loader)),
@@ -313,6 +326,7 @@ def model_train(model, train_loader, valid_loader, train_criterion, eval_criteri
         # Validate at the end of each epoch
         ####################################
         valid_loss, accuracy = evaluate(model, valid_loader, eval_criterion, device, use_amp)
+        set_train_mode(model, finetune=phase == 'finetune')
         old_lr = optimizer.param_groups[0]['lr']
         scheduler.step(valid_loss)
         new_lr = optimizer.param_groups[0]['lr']
@@ -343,13 +357,15 @@ def model_train(model, train_loader, valid_loader, train_criterion, eval_criteri
             writer.add_scalar('accuracy/validation', accuracy, e + 1)
             writer.add_scalar('learning_rate', old_lr, e + 1)
 
-        state = dict(optimizer=optimizer, scheduler=scheduler, epoch=e + 1, best_accuracy=best_accuracy,
-                     phase=phase)
+        stopping = bool(args.patience) and epochs_without_improvement >= args.patience
+        state = dict(epoch=e + 1, best_accuracy=best_accuracy, phase=phase)
         if improved:
+            # The best checkpoint is for prediction, so it leaves out the optimizer state
             save_checkpoint(model, file_name=BEST_CHECKPOINT, **save_kwargs, **state)
-        save_checkpoint(model, file_name=LAST_CHECKPOINT, **save_kwargs, **state)
+        save_checkpoint(model, file_name=LAST_CHECKPOINT, optimizer=optimizer, scheduler=scheduler,
+                        phase_complete=stopping, **save_kwargs, **state)
 
-        if args.patience and epochs_without_improvement >= args.patience:
+        if stopping:
             print('No improvement for {} epochs; stopping this phase early.'.format(args.patience))
             break
 
@@ -398,11 +414,21 @@ def main(argv=None):
         best_accuracy = checkpoint.get('best_accuracy')
         phase = checkpoint.get('phase', 'head')
         print('Resuming {} after epoch {} ({} phase)'.format(args.arch, start_epoch, phase))
+        truncate_history(args.save_dir, start_epoch)
+        if checkpoint.get('phase_complete'):
+            # That phase already stopped early; carry on with whatever comes after it
+            phase_end = args.epochs if phase == 'head' else args.epochs + args.finetune_epochs
+            start_epoch = max(start_epoch, phase_end)
+            print('The {} phase had already stopped early; moving on.'.format(phase))
     else:
-        # A fresh run starts a fresh history
-        for name in (HISTORY_CSV, HISTORY_PLOT):
-            with contextlib.suppress(FileNotFoundError):
-                os.remove(os.path.join(args.save_dir, name))
+        # A fresh run starts from scratch: remove the previous run's history and checkpoints so they can't be
+        # mistaken for this run's (e.g. loaded as the starting point for fine-tuning)
+        for name in (HISTORY_CSV, HISTORY_PLOT, BEST_CHECKPOINT, LAST_CHECKPOINT):
+            path = os.path.join(args.save_dir, name)
+            if os.path.exists(path):
+                if name.endswith('.pt'):
+                    print('Starting a fresh run: replacing the previous {}'.format(path))
+                os.remove(path)
         model = build_model(args.arch, args.hidden_units, num_classes, args.dropout)
     model.to(device)
 
